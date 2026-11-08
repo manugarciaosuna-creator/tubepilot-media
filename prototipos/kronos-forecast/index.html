@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kronos Forecast</title>
+<style>
+  :root{
+    --bg:#05090b; --panel:#0a1316; --line:#14262b; --text:#cfe9e6; --dim:#5f8580;
+    --accent:#2fe0c4; --accent2:#0f6d61; --up:#2fd08a; --down:#ff4d6d; --warn:#ffc65c;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:13px/1.4 var(--mono)}
+  header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}
+  header h1{font-size:13px;margin:0;letter-spacing:.12em;color:var(--accent)}
+  header .tag{color:var(--dim)}
+  header .spacer{flex:1}
+  .live{color:var(--accent)} .live::before{content:"● "}
+  .demo{color:var(--warn)}
+  .controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  select,input,button{background:var(--panel);color:var(--text);border:1px solid var(--line);font:inherit;padding:5px 8px;border-radius:4px}
+  input{width:70px}
+  button{cursor:pointer;border-color:var(--accent2)} button:hover{border-color:var(--accent)}
+  button:disabled{opacity:.5;cursor:wait}
+  main{display:grid;grid-template-columns:1fr 300px;gap:1px;background:var(--line);min-height:calc(100vh - 50px)}
+  @media (max-width:900px){main{grid-template-columns:1fr}}
+  section{background:var(--bg);padding:12px 16px;min-width:0}
+  .label{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px;display:flex;justify-content:space-between}
+  #chartWrap{position:relative;height:min(62vh,560px)}
+  canvas{width:100%;height:100%;display:block}
+  .side{display:flex;flex-direction:column;gap:1px;background:var(--line);padding:0}
+  .side>div{background:var(--panel);padding:12px 14px}
+  .kv{display:flex;justify-content:space-between;padding:3px 0}
+  .kv span:first-child{color:var(--dim)}
+  .big{font-size:26px;color:var(--accent)}
+  .bar{height:8px;background:#11201f;border-radius:4px;overflow:hidden;margin-top:6px;display:flex}
+  .bar i{display:block;height:100%}
+  .up{color:var(--up)} .down{color:var(--down)}
+  .note{color:var(--dim);font-size:11px}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th,td{text-align:right;padding:4px 6px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--dim);font-weight:normal}
+  .bottom{grid-column:1/-1}
+  .err{color:var(--down);padding:8px 0}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--dim);font-size:11px}
+  .legend b{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:5px}
+</style>
+</head>
+<body>
+<header>
+  <h1>◆ KRONOS FORECAST</h1>
+  <span class="tag" id="meta">—</span>
+  <span id="mode" class="live">live</span>
+  <span class="spacer"></span>
+  <div class="controls">
+    <select id="symbol">
+      <option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option><option>BNBUSDT</option><option>XRPUSDT</option>
+    </select>
+    <select id="interval">
+      <option>15m</option><option selected>1h</option><option>4h</option><option>1d</option>
+    </select>
+    <label class="note">horizonte <input id="horizon" type="number" value="24" min="1" max="96"></label>
+    <label class="note">muestras <input id="samples" type="number" value="30" min="1" max="200"></label>
+    <button id="run">Predecir</button>
+    <button id="bt">Backtest</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div class="label"><span id="chartTitle">Precio + 24 velas previstas</span><span id="lastPrice"></span></div>
+    <div id="chartWrap"><canvas id="chart"></canvas></div>
+    <div class="legend" style="margin-top:8px">
+      <span><b style="background:var(--accent)"></b>mediana</span>
+      <span><b style="background:rgba(47,224,196,.35)"></b>rango 25–75 %</span>
+      <span><b style="background:rgba(47,224,196,.12)"></b>rango 5–95 %</span>
+      <span><b style="background:rgba(207,233,230,.25)"></b>trayectorias muestreadas</span>
+    </div>
+    <div id="error" class="err"></div>
+  </section>
+
+  <section class="side">
+    <div>
+      <div class="label"><span>Próximas <span id="h1">24</span> velas · mediana</span></div>
+      <div class="big" id="median">—</div>
+      <div class="kv"><span>cambio mediano</span><span id="chg">—</span></div>
+      <div class="kv"><span>rango 90 %</span><span id="range">—</span></div>
+    </div>
+    <div>
+      <div class="label"><span>Trayectorias</span><span id="nSamples"></span></div>
+      <div class="kv"><span class="up">acaban arriba</span><span id="pup">—</span></div>
+      <div class="kv"><span class="down">acaban abajo</span><span id="pdown">—</span></div>
+      <div class="bar"><i id="barUp" style="background:var(--up)"></i><i id="barDown" style="background:var(--down)"></i></div>
+    </div>
+    <div>
+      <div class="label"><span>Modelo</span></div>
+      <div class="kv"><span>nombre</span><span id="modelName">—</span></div>
+      <div class="kv"><span>contexto</span><span id="ctx">—</span></div>
+      <div class="kv"><span>generado</span><span id="gen">—</span></div>
+    </div>
+    <div>
+      <div class="label"><span>Backtest walk-forward</span></div>
+      <div id="btSummary" class="note">Pulsa «Backtest» para comprobar si el modelo acierta más que el modelo base.</div>
+    </div>
+    <div class="note">
+      ⚠ Prototipo de visualización. No es asesoramiento financiero, no opera y no usa claves.
+      Una predicción de velas no garantiza beneficios: compara siempre con el modelo base.
+    </div>
+  </section>
+
+  <section class="bottom" id="btSection" hidden>
+    <div class="label"><span>Detalle del backtest (cierre real vs mediana prevista al final del horizonte)</span></div>
+    <div style="overflow-x:auto"><table id="btTable"></table></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 2) => v.toLocaleString("es-ES", {minimumFractionDigits: d, maximumFractionDigits: d});
+const pct = v => (v >= 0 ? "+" : "") + fmt(v, 2) + " %";
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let DATA = null;
+
+function params() {
+  return new URLSearchParams({symbol: $("symbol").value, interval: $("interval").value,
+    horizon: $("horizon").value, samples: $("samples").value});
+}
+
+async function run() {
+  $("run").disabled = true; $("error").textContent = "";
+  $("chartTitle").textContent = "Calculando…";
+  try {
+    const r = await fetch("/api/forecast?" + params());
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    DATA = j; render(); draw();
+  } catch (e) { $("error").textContent = "Error: " + e.message; }
+  finally { $("run").disabled = false; }
+}
+
+function render() {
+  const d = DATA, q = d.quantiles, last = d.last_price, H = d.horizon;
+  $("meta").textContent = `${d.symbol} · ${d.interval} · Binance`;
+  $("mode").textContent = d.demo ? "DEMO (datos sintéticos)" : "live";
+  $("mode").className = d.demo ? "demo" : "live";
+  $("chartTitle").textContent = `Precio + ${H} velas previstas`;
+  $("lastPrice").textContent = "último " + fmt(last);
+  $("h1").textContent = H;
+  $("median").textContent = fmt(q.p50[H - 1]);
+  $("chg").textContent = pct(d.median_change_pct);
+  $("chg").className = d.median_change_pct >= 0 ? "up" : "down";
+  $("range").textContent = `${pct(d.range_90_pct[0])} / ${pct(d.range_90_pct[1])}`;
+  $("nSamples").textContent = d.samples + " muestras";
+  $("pup").textContent = fmt(d.prob_up * 100, 0) + " %";
+  $("pdown").textContent = fmt((1 - d.prob_up) * 100, 0) + " %";
+  $("barUp").style.width = d.prob_up * 100 + "%";
+  $("barDown").style.width = (1 - d.prob_up) * 100 + "%";
+  $("modelName").textContent = d.model;
+  $("ctx").textContent = d.context + " velas";
+  $("gen").textContent = new Date(d.generated_at).toLocaleTimeString("es-ES");
+}
+
+function draw() {
+  if (!DATA) return;
+  const cv = $("chart"), dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, Hh = cv.clientHeight;
+  cv.width = W * dpr; cv.height = Hh * dpr;
+  const c = cv.getContext("2d"); c.scale(dpr, dpr);
+  const d = DATA, q = d.quantiles, H = d.horizon;
+  const hist = d.history.slice(-(W < 700 ? Math.max(H * 2, 36) : 120)), N = hist.length;
+  const padR = 70, padB = 22, padT = 10;
+  const total = N + H, cw = (W - padR) / total;
+  let lo = Infinity, hi = -Infinity;
+  hist.forEach(k => { lo = Math.min(lo, k[3]); hi = Math.max(hi, k[2]); });
+  q.p5.forEach(v => lo = Math.min(lo, v)); q.p95.forEach(v => hi = Math.max(hi, v));
+  const m = (hi - lo) * 0.05; lo -= m; hi += m;
+  const y = v => padT + (hi - v) / (hi - lo) * (Hh - padT - padB);
+  const x = i => i * cw + cw / 2;
+
+  // rejilla y eje de precios
+  c.font = "10px " + css("--mono"); c.fillStyle = css("--dim"); c.strokeStyle = "#0f1d20"; c.lineWidth = 1;
+  for (let i = 0; i <= 6; i++) {
+    const v = lo + (hi - lo) * i / 6, yy = y(v);
+    c.beginPath(); c.moveTo(0, yy); c.lineTo(W - padR, yy); c.stroke();
+    c.fillText(fmt(v, v > 100 ? 0 : 3), W - padR + 6, yy + 3);
+  }
+  // zona de predicción
+  const x0 = x(N - 1);
+  const g = c.createLinearGradient(x0, 0, W - padR, 0);
+  g.addColorStop(0, "rgba(47,224,196,.06)"); g.addColorStop(1, "rgba(47,224,196,0)");
+  c.fillStyle = g; c.fillRect(x0, padT, W - padR - x0, Hh - padT - padB);
+  c.setLineDash([3, 4]); c.strokeStyle = css("--accent2");
+  c.beginPath(); c.moveTo(x0, padT); c.lineTo(x0, Hh - padB); c.stroke(); c.setLineDash([]);
+
+  // velas históricas
+  const bw = Math.max(1, cw * 0.65);
+  hist.forEach((k, i) => {
+    const [, o, h, l, cl] = k, col = cl >= o ? css("--up") : css("--down");
+    c.strokeStyle = col; c.fillStyle = col;
+    c.beginPath(); c.moveTo(x(i), y(h)); c.lineTo(x(i), y(l)); c.stroke();
+    const top = y(Math.max(o, cl)), hh = Math.max(1, Math.abs(y(o) - y(cl)));
+    c.fillRect(x(i) - bw / 2, top, bw, hh);
+  });
+
+  // todo lo previsto queda recortado al área del gráfico
+  c.save(); c.beginPath(); c.rect(0, padT, W - padR, Hh - padT - padB); c.clip();
+
+  // bandas
+  const fx = i => x(N + i);
+  const band = (a, b, fill) => {
+    c.beginPath(); c.moveTo(x0, y(d.last_price));
+    a.forEach((v, i) => c.lineTo(fx(i), y(v)));
+    for (let i = b.length - 1; i >= 0; i--) c.lineTo(fx(i), y(b[i]));
+    c.closePath(); c.fillStyle = fill; c.fill();
+  };
+  band(q.p95, q.p5, "rgba(47,224,196,.10)");
+  band(q.p75, q.p25, "rgba(47,224,196,.22)");
+
+  // trayectorias
+  c.strokeStyle = "rgba(207,233,230,.13)"; c.lineWidth = 1;
+  d.paths.slice(0, 60).forEach(p => {
+    c.beginPath(); c.moveTo(x0, y(d.last_price));
+    p.forEach((v, i) => c.lineTo(fx(i), y(v))); c.stroke();
+  });
+  // mediana
+  c.strokeStyle = css("--accent"); c.lineWidth = 2; c.shadowColor = css("--accent"); c.shadowBlur = 8;
+  c.beginPath(); c.moveTo(x0, y(d.last_price));
+  q.p50.forEach((v, i) => c.lineTo(fx(i), y(v))); c.stroke(); c.shadowBlur = 0;
+  c.restore();
+
+  // etiquetas de precio
+  const tag = (v, col, yy = y(v)) => {
+    c.fillStyle = col; c.fillRect(W - padR + 2, yy - 8, padR - 4, 16);
+    c.fillStyle = "#031"; c.fillText(fmt(v, v > 100 ? 0 : 3), W - padR + 6, yy + 3);
+  };
+  const yl = y(d.last_price), ym = y(q.p50[H - 1]);
+  tag(d.last_price, css("--text"));
+  tag(q.p50[H - 1], css("--accent"), Math.abs(ym - yl) < 17 ? yl + (ym >= yl ? 17 : -17) : ym);
+
+  // eje temporal
+  c.fillStyle = css("--dim");
+  const times = hist.map(k => k[0]).concat(d.future_times);
+  const every = Math.ceil(total / Math.max(3, Math.floor((W - padR) / 95)));
+  for (let i = 0; i < total; i += every) {
+    const t = new Date(times[i]);
+    const s = d.interval.endsWith("d") ? t.toLocaleDateString("es-ES", {day: "2-digit", month: "2-digit"})
+      : t.toLocaleString("es-ES", {day: "2-digit", hour: "2-digit", minute: "2-digit"});
+    c.fillText(s, x(i) - 18, Hh - 6);
+  }
+}
+
+async function runBacktest() {
+  $("bt").disabled = true;
+  $("btSummary").textContent = "Ejecutando backtest… (con Kronos en CPU puede tardar varios minutos)";
+  try {
+    const r = await fetch("/api/backtest?" + params() + "&windows=20");
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    const s = j.summary, row = (k, lbl) =>
+      `<tr><td>${lbl}</td><td>${fmt(s[k].hit_rate * 100, 0)} %</td><td>${fmt(s[k].coverage_90 * 100, 0)} %</td><td>${fmt(s[k].mae_pct)} %</td></tr>`;
+    const beats = s.model.hit_rate > s.base.hit_rate && s.model.mae_pct < s.base.mae_pct;
+    $("btSummary").innerHTML =
+      `<table><tr><th></th><th>dirección</th><th>en rango 90</th><th>error</th></tr>
+       ${row("model", j.model.split(" ")[0])}${row("base", "base")}</table>
+       <p class="note">${j.windows} ventanas. ${j.model.startsWith("baseline")
+         ? "Estás usando el modelo base: instala Kronos para compararlo."
+         : beats ? "El modelo supera al base en esta muestra (pequeña: no es concluyente)."
+                 : "El modelo <b>no</b> supera claramente al base en esta muestra."}
+       Un 50 % en dirección equivale a lanzar una moneda.</p>`;
+    $("btSection").hidden = false;
+    $("btTable").innerHTML = `<tr><th>fecha</th><th>último</th><th>real</th><th>mediana modelo</th><th>dir.</th><th>mediana base</th><th>dir.</th></tr>` +
+      j.rows.map(r => `<tr><td>${new Date(r.t).toLocaleString("es-ES")}</td><td>${fmt(r.last)}</td><td>${fmt(r.actual)}</td>
+        <td>${fmt(r.model.median)}</td><td class="${r.model.dir_ok ? "up" : "down"}">${r.model.dir_ok ? "✓" : "✗"}</td>
+        <td>${fmt(r.base.median)}</td><td class="${r.base.dir_ok ? "up" : "down"}">${r.base.dir_ok ? "✓" : "✗"}</td></tr>`).join("");
+  } catch (e) { $("btSummary").textContent = "Error: " + e.message; }
+  finally { $("bt").disabled = false; }
+}
+
+$("run").onclick = run;
+$("bt").onclick = runBacktest;
+["symbol", "interval"].forEach(id => $(id).onchange = run);
+window.addEventListener("resize", draw);
+setInterval(() => { if (!document.hidden) run(); }, 5 * 60 * 1000);
+run();
+</script>
+</body>
+</html>

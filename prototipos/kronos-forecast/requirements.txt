@@ -1,0 +1,5 @@
+numpy
+pandas
+# Para usar Kronos (opcional; sin esto se usa el modelo base):
+#   git clone https://github.com/shiyu-coder/Kronos
+#   pip install -r Kronos/requirements.txt   (torch, huggingface_hub, einops, ...)
